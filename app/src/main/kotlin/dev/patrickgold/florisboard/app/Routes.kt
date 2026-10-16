@@ -70,6 +70,7 @@ import dev.patrickgold.florisboard.app.settings.localization.LanguagePackManager
 import dev.patrickgold.florisboard.app.settings.localization.LocalizationScreen
 import dev.patrickgold.florisboard.app.settings.localization.SelectLocaleScreen
 import dev.patrickgold.florisboard.app.settings.localization.SubtypeEditorScreen
+import dev.patrickgold.florisboard.app.settings.OfflineAiScreen
 import dev.patrickgold.florisboard.app.settings.media.MediaScreen
 import dev.patrickgold.florisboard.app.settings.smartbar.SmartbarScreen
 import dev.patrickgold.florisboard.app.settings.theme.ThemeManagerScreen
@@ -148,6 +149,10 @@ object Routes {
             @Deeplink("settings/keyboard/input-feedback")
             object InputFeedback
         }
+
+        @Serializable
+        @Deeplink("settings/offline-ai")
+        object OfflineAI
 
         @Serializable
         @Deeplink("settings/smartbar")
@@ -305,6 +310,7 @@ object Routes {
             composableWithDeepLink(Settings.Keyboard.InputFeedback::class) { InputFeedbackScreen() }
 
             composableWithDeepLink(Settings.Smartbar::class) { SmartbarScreen() }
+            composableWithDeepLink(Settings.OfflineAI::class) { OfflineAiScreen() }
 
             composableWithDeepLink(Settings.Typing::class) { TypingScreen() }
 
