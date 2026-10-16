@@ -80,7 +80,7 @@ object OfflinePatternEngine {
     private fun prefixFrom(content: K3Content): String =
         normalize(content.composingText.toString()).joinToString(" ")
 
-    fun suggest(context: Context, content: K3Content, maxCount: Int): List<WordSuggestionCandidate> = synchronized(lock) {
+    fun suggest(context: Context, content: K3Content, maxCount: Int, provider: SuggestionProvider): List<WordSuggestionCandidate> = synchronized(lock) {
         val history = contextFrom(content)
         val prefix = prefixFrom(content)
         if (history.isBlank() && prefix.isBlank()) return@synchronized emptyList()
@@ -125,7 +125,7 @@ object OfflinePatternEngine {
             val candidate = WordSuggestionCandidate(
                 text = entry.key,
                 confidence = confidence,
-                sourceProvider = null,
+                sourceProvider = provider,
             )
             pendingContexts[entry.key] = history
             candidate
