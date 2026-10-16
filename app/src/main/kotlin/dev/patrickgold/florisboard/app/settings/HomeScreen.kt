@@ -89,6 +89,11 @@ fun HomeScreen() = FlorisScreen {
         )
         Preference(
             icon = Icons.Default.SmartButton,
+            title = "Offline AI Chat & Patterns",
+            onClick = { navController.navigate(Routes.Settings.OfflineAI) },
+        )
+        Preference(
+            icon = Icons.Default.SmartButton,
             title = stringRes(R.string.settings__smartbar__title),
             onClick = { navController.navigate(Routes.Settings.Smartbar) },
         )
