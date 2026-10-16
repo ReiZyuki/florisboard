@@ -329,7 +329,7 @@ object OfflinePatternEngine {
                     if (structured.factCandidates.isNotEmpty()) {
                         append("\n\nPossible facts (heuristic):")
                         structured.factCandidates.take(10).forEachIndexed { index, fact ->
-                            append("\\n${index + 1}. $fact")
+                            append("\n${index + 1}. $fact")
                         }
                     } else {
                         append("\n\nNo clear fact-like sentences were detected by the simple rule set.")
