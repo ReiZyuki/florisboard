@@ -120,8 +120,9 @@ object OfflinePatternEngine {
             }
         }
 
-        val result = scores.entries.sortedByDescending { it.value }.take(maxCount).mapIndexed { index, entry ->
-            val confidence = (entry.value / (entry.value + 8.0)).coerceIn(0.05, 0.95)
+        val totalScore = scores.values.sum().coerceAtLeast(1.0)
+        val result = scores.entries.sortedByDescending { it.value }.take(maxCount).map { entry ->
+            val confidence = (entry.value / totalScore).coerceIn(0.0, 1.0)
             val candidate = WordSuggestionCandidate(
                 text = entry.key,
                 confidence = confidence,
@@ -154,7 +155,7 @@ object OfflinePatternEngine {
         }
         val bestWords = bestPattern?.let(::normalize).orEmpty()
         val overlap = bestWords.count { it in promptWords }.coerceAtMost(promptWords.size)
-        val confidence = if (promptWords.isEmpty()) 15 else
+        var confidence = if (promptWords.isEmpty()) 15 else
             ((overlap.toDouble() / promptWords.size.coerceAtLeast(1)) * 65.0 + 20.0).toInt().coerceIn(10, 85)
 
         val seed = if (promptWords.isNotEmpty()) promptWords.takeLast(4) else emptyList()
@@ -163,7 +164,7 @@ object OfflinePatternEngine {
             // Start with the most relevant stored pattern, then use the same local
             // next-word scoring used by the keyboard to continue its final context.
             output.addAll(bestWords)
-            repeat(8) {
+            repeat(8) { step ->
                 val history = output.takeLast(4)
                 val nextScores = mutableMapOf<String, Double>()
                 patterns.forEach { line ->
@@ -184,7 +185,12 @@ object OfflinePatternEngine {
                         nextScores[parts[1]] = (nextScores[parts[1]] ?: 0.0) + (parts[2].toDoubleOrNull() ?: 0.0) * 3.0
                     }
                 }
-                val next = nextScores.maxByOrNull { it.value }?.key
+                val totalNextScore = nextScores.values.sum()
+                val bestNext = nextScores.maxByOrNull { it.value }
+                if (step == 0 && bestNext != null && totalNextScore > 0.0) {
+                    confidence = ((bestNext.value / totalNextScore) * 100.0).toInt().coerceIn(1, 99)
+                }
+                val next = bestNext?.key
                 if (next != null && output.size < 24) output.add(next)
             }
         } else {
