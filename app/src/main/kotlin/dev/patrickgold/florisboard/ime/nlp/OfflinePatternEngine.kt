@@ -211,6 +211,78 @@ object OfflinePatternEngine {
 
     data class ChatReply(val text: String, val confidencePercent: Int)
 
+    data class StructuredText(
+        val chunks: List<String>,
+        val factCandidates: List<String>,
+        val keywords: List<String>,
+    )
+
+    private val sentenceBoundaryRegex = Regex("(?<=[.!?।])\\s+")
+    private val factCueRegex = Regex(
+        """\\b(is|are|was|were|has|have|had|because|means|caused|decided|lives|works|likes|hates|became|met|found|told|said|known|called|hai|hain|tha|thi|the|hota|hoti|hua|hui|kiya|karta|karti|karte|rahta|rahti|rehta|rehte)\\b""",
+        RegexOption.IGNORE_CASE,
+    )
+    private val keywordStopWords = setOf(
+        "the", "and", "for", "that", "this", "with", "from", "have", "has", "was", "were",
+        "are", "is", "you", "your", "but", "not", "they", "them", "then", "than", "into",
+        "about", "what", "when", "where", "which", "while", "will", "would", "could",
+        "hai", "hain", "tha", "thi", "the", "aur", "ke", "ki", "ka", "ko", "me", "mein",
+        "se", "par", "ye", "woh", "ek", "to", "bhi", "nahi", "nahin", "bro", "because",
+    )
+
+    /**
+     * Deterministically divides supplied text into bounded chunks and extracts
+     * candidate fact sentences and frequent keywords. These are heuristic
+     * candidates, not guaranteed semantic facts or a language-model summary.
+     */
+    fun structureText(text: String, maxChunkChars: Int = 700): StructuredText {
+        val cleaned = text.replace("\\r\\n", "\\n").replace('\\r', '\\n').trim()
+        if (cleaned.isEmpty()) return StructuredText(emptyList(), emptyList(), emptyList())
+
+        val sentences = cleaned.split(Regex("(?<=[.!?।])\\\\s+|\\\\n+"))
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+
+        val chunks = mutableListOf<String>()
+        var current = StringBuilder()
+        val limit = maxChunkChars.coerceAtLeast(120)
+        for (sentence in sentences) {
+            var remaining = sentence
+            while (remaining.length > limit) {
+                if (current.isNotEmpty()) {
+                    chunks.add(current.toString().trim())
+                    current = StringBuilder()
+                }
+                chunks.add(remaining.take(limit).trim())
+                remaining = remaining.drop(limit).trimStart()
+            }
+            if (remaining.isEmpty()) continue
+            if (current.isNotEmpty() && current.length + remaining.length + 1 > limit) {
+                chunks.add(current.toString().trim())
+                current = StringBuilder()
+            }
+            if (current.isNotEmpty()) current.append(' ')
+            current.append(remaining)
+        }
+        if (current.isNotEmpty()) chunks.add(current.toString().trim())
+
+        val facts = sentences
+            .filter { it.length >= 18 && factCueRegex.containsMatchIn(it) }
+            .distinct()
+            .take(40)
+
+        val keywords = normalize(cleaned)
+            .filter { it.length >= 3 && it !in keywordStopWords && it.any(Char::isLetter) }
+            .groupingBy { it }
+            .eachCount()
+            .entries
+            .sortedWith(compareByDescending<Map.Entry<String, Int>> { it.value }.thenBy { it.key })
+            .take(20)
+            .map { it.key }
+
+        return StructuredText(chunks, facts, keywords)
+    }
+
     private fun bigrams(words: List<String>): Set<String> =
         if (words.size < 2) emptySet()
         else (0 until words.lastIndex).map { "${words[it]} ${words[it + 1]}" }.toSet()
@@ -242,6 +314,32 @@ object OfflinePatternEngine {
     }
 
     fun chatReply(context: Context, prompt: String): ChatReply = synchronized(lock) {
+        // Long pasted text is structured first rather than treated as one giant query.
+        // Nothing is persisted: the extracted structure exists only for this reply.
+        if (prompt.length > 1200) {
+            val structured = structureText(prompt)
+            if (structured.chunks.isNotEmpty()) {
+                val report = buildString {
+                    append("Text structure complete\\n")
+                    append("Chunks: ${structured.chunks.size}\\n")
+                    append("Fact candidates: ${structured.factCandidates.size}\\n")
+                    if (structured.keywords.isNotEmpty()) {
+                        append("\\nKey terms: ${structured.keywords.joinToString(", ")}")
+                    }
+                    if (structured.factCandidates.isNotEmpty()) {
+                        append("\\n\\nPossible facts (heuristic):")
+                        structured.factCandidates.take(10).forEachIndexed { index, fact ->
+                            append("\\n${index + 1}. $fact")
+                        }
+                    } else {
+                        append("\\n\\nNo clear fact-like sentences were detected by the simple rule set.")
+                    }
+                    append("\\n\\nNote: these are rule-based candidates, not verified facts.")
+                }
+                return@synchronized ChatReply(report, 60)
+            }
+        }
+
         val promptWords = normalize(prompt)
         val data = snapshot(context)
         if (data.patterns.isEmpty()) {
