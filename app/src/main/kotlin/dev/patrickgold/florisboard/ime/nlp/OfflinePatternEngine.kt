@@ -133,6 +133,69 @@ object OfflinePatternEngine {
         result
     }
 
+    data class ChatReply(val text: String, val confidencePercent: Int)
+
+    /**
+     * Generates a short reply by repeatedly choosing the highest-scoring next word
+     * from local sentence patterns and accepted-word counts.
+     */
+    fun chatReply(context: Context, prompt: String): ChatReply = synchronized(lock) {
+        val promptWords = normalize(prompt)
+        val patterns = readPatterns(context)
+        if (patterns.isEmpty()) {
+            return@synchronized ChatReply("Pattern file empty hai. App se Hinglish examples add karo.", 0)
+        }
+
+        val bestPattern = patterns.maxByOrNull { line ->
+            val words = normalize(line)
+            val overlap = words.count { it in promptWords }
+            val phraseBonus = if (promptWords.isNotEmpty() && line.lowercase().contains(promptWords.joinToString(" "))) 4 else 0
+            overlap * 2 + phraseBonus
+        }
+        val bestWords = bestPattern?.let(::normalize).orEmpty()
+        val overlap = bestWords.count { it in promptWords }.coerceAtMost(promptWords.size)
+        val confidence = if (promptWords.isEmpty()) 15 else
+            ((overlap.toDouble() / promptWords.size.coerceAtLeast(1)) * 65.0 + 20.0).toInt().coerceIn(10, 85)
+
+        val seed = if (promptWords.isNotEmpty()) promptWords.takeLast(4) else emptyList()
+        val output = mutableListOf<String>()
+        if (bestWords.isNotEmpty() && overlap > 0) {
+            // Start with the most relevant stored pattern, then use the same local
+            // next-word scoring used by the keyboard to continue its final context.
+            output.addAll(bestWords)
+            repeat(8) {
+                val history = output.takeLast(4)
+                val nextScores = mutableMapOf<String, Double>()
+                patterns.forEach { line ->
+                    val words = normalize(line)
+                    for (n in minOf(4, history.size, words.size - 1) downTo 1) {
+                        if (words.size > n) {
+                            for (i in n until words.size) {
+                                if (words.subList(i - n, i) == history.takeLast(n)) {
+                                    nextScores[words[i]] = (nextScores[words[i]] ?: 0.0) + n * 2.0
+                                }
+                            }
+                        }
+                    }
+                }
+                learnedFile(context).takeIf { it.exists() }?.forEachLine { line ->
+                    val parts = line.split('\t')
+                    if (parts.size == 3 && history.joinToString(" ").endsWith(parts[0])) {
+                        nextScores[parts[1]] = (nextScores[parts[1]] ?: 0.0) + (parts[2].toDoubleOrNull() ?: 0.0) * 3.0
+                    }
+                }
+                val next = nextScores.maxByOrNull { it.value }?.key
+                if (next != null && output.size < 24) output.add(next)
+            }
+        } else {
+            return@synchronized ChatReply(
+                "Mere stored patterns mein is message ka strong match nahi mila. Pattern file mein is topic ke examples add karo.",
+                confidence
+            )
+        }
+        ChatReply(output.distinct().joinToString(" ").replaceFirstChar { it.uppercase() }, confidence)
+    }
+
     fun learnAccepted(context: Context, candidate: SuggestionCandidate) = synchronized(lock) {
         val word = candidate.text.toString().trim().lowercase(Locale.ROOT)
         if (word.isBlank()) return@synchronized
