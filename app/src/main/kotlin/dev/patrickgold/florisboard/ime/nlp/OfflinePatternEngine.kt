@@ -320,21 +320,21 @@ object OfflinePatternEngine {
             val structured = structureText(prompt)
             if (structured.chunks.isNotEmpty()) {
                 val report = buildString {
-                    append("Text structure complete\\n")
-                    append("Chunks: ${structured.chunks.size}\\n")
-                    append("Fact candidates: ${structured.factCandidates.size}\\n")
+                    append("Text structure complete\n")
+                    append("Chunks: ${structured.chunks.size}\n")
+                    append("Fact candidates: ${structured.factCandidates.size}\n")
                     if (structured.keywords.isNotEmpty()) {
-                        append("\\nKey terms: ${structured.keywords.joinToString(", ")}")
+                        append("\nKey terms: ${structured.keywords.joinToString(", ")}")
                     }
                     if (structured.factCandidates.isNotEmpty()) {
-                        append("\\n\\nPossible facts (heuristic):")
+                        append("\n\nPossible facts (heuristic):")
                         structured.factCandidates.take(10).forEachIndexed { index, fact ->
                             append("\\n${index + 1}. $fact")
                         }
                     } else {
-                        append("\\n\\nNo clear fact-like sentences were detected by the simple rule set.")
+                        append("\n\nNo clear fact-like sentences were detected by the simple rule set.")
                     }
-                    append("\\n\\nNote: these are rule-based candidates, not verified facts.")
+                    append("\n\nNote: these are rule-based candidates, not verified facts.")
                 }
                 return@synchronized ChatReply(report, 60)
             }
