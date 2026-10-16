@@ -211,42 +211,82 @@ object OfflinePatternEngine {
 
     data class ChatReply(val text: String, val confidencePercent: Int)
 
+    private fun bigrams(words: List<String>): Set<String> =
+        if (words.size < 2) emptySet()
+        else (0 until words.lastIndex).map { "${words[it]} ${words[it + 1]}" }.toSet()
+
+    /**
+     * Ranks stored examples using token coverage, example precision, shared
+     * two-word phrases, and ordered phrase matches. This is retrieval scoring,
+     * not semantic understanding.
+     */
+    private fun patternMatchScore(promptWords: List<String>, patternWords: List<String>): Double {
+        if (promptWords.isEmpty() || patternWords.isEmpty()) return 0.0
+        val promptSet = promptWords.toSet()
+        val patternSet = patternWords.toSet()
+        val overlap = promptSet.intersect(patternSet).size
+        if (overlap == 0) return 0.0
+
+        val coverage = overlap.toDouble() / promptSet.size.coerceAtLeast(1)
+        val precision = overlap.toDouble() / patternSet.size.coerceAtLeast(1)
+        val promptBigrams = bigrams(promptWords)
+        val patternBigrams = bigrams(patternWords)
+        val bigramScore = if (promptBigrams.isEmpty()) 0.0 else
+            promptBigrams.intersect(patternBigrams).size.toDouble() / promptBigrams.size
+        val promptPhrase = promptWords.joinToString(" ")
+        val patternPhrase = patternWords.joinToString(" ")
+        val phraseBonus = if (promptPhrase.length >= 4 &&
+            (patternPhrase.contains(promptPhrase) || promptPhrase.contains(patternPhrase))) 1.0 else 0.0
+
+        return coverage * 0.50 + precision * 0.20 + bigramScore * 0.20 + phraseBonus * 0.10
+    }
+
     fun chatReply(context: Context, prompt: String): ChatReply = synchronized(lock) {
         val promptWords = normalize(prompt)
         val data = snapshot(context)
         if (data.patterns.isEmpty()) {
             return@synchronized ChatReply("Pattern file empty hai. App se Hinglish examples add karo.", 0)
         }
-
-        val bestPattern = data.patterns.maxByOrNull { words ->
-            val overlap = words.count { it in promptWords }
-            val phraseBonus = if (promptWords.isNotEmpty() &&
-                words.joinToString(" ").contains(promptWords.joinToString(" "))) 4 else 0
-            overlap * 2 + phraseBonus
+        if (promptWords.isEmpty()) {
+            return@synchronized ChatReply("Kuch text likh bro, phir stored patterns se match karunga.", 0)
         }
-        val bestWords = bestPattern.orEmpty()
-        val overlap = bestWords.count { it in promptWords }.coerceAtMost(promptWords.size)
-        var confidence = if (promptWords.isEmpty()) 15 else
-            ((overlap.toDouble() / promptWords.size.coerceAtLeast(1)) * 65.0 + 20.0).toInt().coerceIn(10, 85)
 
-        if (bestWords.isEmpty() || overlap == 0) {
+        val ranked = data.patterns
+            .map { words -> words to patternMatchScore(promptWords, words) }
+            .filter { it.second > 0.0 }
+            .sortedByDescending { it.second }
+        val bestWords = ranked.firstOrNull()?.first.orEmpty()
+        val bestScore = ranked.firstOrNull()?.second ?: 0.0
+        val secondScore = ranked.getOrNull(1)?.second ?: 0.0
+        val margin = (bestScore - secondScore).coerceAtLeast(0.0)
+        val confidence = ((bestScore * 75.0) + (margin * 25.0)).toInt().coerceIn(1, 95)
+
+        if (bestWords.isEmpty()) {
             return@synchronized ChatReply(
                 "Mere stored patterns mein is message ka strong match nahi mila. Pattern file mein is topic ke examples add karo.",
-                confidence,
+                0,
             )
         }
 
+        // Keep the best matching example as the response base. Extend it only
+        // when the local pattern/learning index has a continuation, and stop
+        // when the engine starts cycling through the same recent words.
         val output = bestWords.toMutableList()
-        repeat(8) { step ->
-            if (output.size >= 24) return@repeat
+        val seenStates = mutableSetOf(output.takeLast(MAX_CONTEXT_WORDS).joinToString(" "))
+        repeat(8) {
+            if (output.size >= 32) return@repeat
             val nextScores = scoresFor(output.takeLast(MAX_CONTEXT_WORDS), "", data)
-            val total = nextScores.values.sum()
-            val bestNext = nextScores.maxByOrNull { it.value }
-            if (step == 0 && bestNext != null && total > 0.0) {
-                confidence = ((bestNext.value / total) * 100.0).toInt().coerceIn(1, 99)
-            }
-            val next = bestNext?.key ?: return@repeat
+            val recent = output.takeLast(3).toSet()
+            val next = nextScores.entries
+                .filter { it.key !in recent }
+                .maxByOrNull { it.value }
+                ?.key ?: return@repeat
             output.add(next)
+            val state = output.takeLast(MAX_CONTEXT_WORDS).joinToString(" ")
+            if (!seenStates.add(state)) {
+                output.removeAt(output.lastIndex)
+                return@repeat
+            }
         }
         ChatReply(output.joinToString(" ").replaceFirstChar { it.uppercase() }, confidence)
     }
