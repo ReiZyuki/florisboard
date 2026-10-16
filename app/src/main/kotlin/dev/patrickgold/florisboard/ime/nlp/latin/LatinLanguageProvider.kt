@@ -24,6 +24,7 @@ import dev.patrickgold.florisboard.ime.nlp.SpellingResult
 import dev.patrickgold.florisboard.ime.nlp.SuggestionCandidate
 import dev.patrickgold.florisboard.ime.nlp.SuggestionProvider
 import dev.patrickgold.florisboard.ime.nlp.OfflinePatternEngine
+import dev.patrickgold.florisboard.ime.nlp.AutoCorrectEngine
 import dev.patrickgold.florisboard.lib.devtools.flogDebug
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -44,6 +45,7 @@ class LatinLanguageProvider(context: Context) : SpellingProvider, SuggestionProv
     private val appContext by context.appContext()
 
     private val wordData = guardedByLock { mutableMapOf<String, Int>() }
+    @Volatile private var autocorrectVocabulary: List<String> = emptyList()
     private val wordDataSerializer = MapSerializer(String.serializer(), Int.serializer())
 
     override val providerId = ProviderId
@@ -76,6 +78,7 @@ class LatinLanguageProvider(context: Context) : SpellingProvider, SuggestionProv
                 val jsonData = Json.decodeFromString(wordDataSerializer, rawData)
                 wordData.putAll(jsonData)
             }
+            autocorrectVocabulary = wordData.keys.toList()
         }
     }
 
@@ -88,14 +91,28 @@ class LatinLanguageProvider(context: Context) : SpellingProvider, SuggestionProv
         allowPossiblyOffensive: Boolean,
         isPrivateSession: Boolean,
     ): SpellingResult {
-        return when (word.lowercase()) {
-            // Use typo for typing errors
-            "typo" -> SpellingResult.typo(arrayOf("typo1", "typo2", "typo3"))
-            // Use grammar error if the algorithm can detect this. On Android 11 and lower grammar errors are visually
-            // marked as typos due to a lack of support
-            "gerror" -> SpellingResult.grammarError(arrayOf("grammar1", "grammar2", "grammar3"))
-            // Use valid word for valid input
-            else -> SpellingResult.validWord()
+        val normalizedWord = word.lowercase()
+        if (normalizedWord == "typo") {
+            return SpellingResult.typo(arrayOf("typo1", "typo2", "typo3"))
+        }
+        if (normalizedWord == "gerror") {
+            return SpellingResult.grammarError(arrayOf("grammar1", "grammar2", "grammar3"))
+        }
+
+        val known = wordData.withLock { normalizedWord in it }
+        if (known || word.isBlank() || !word.all(Char::isLetter)) {
+            return SpellingResult.validWord()
+        }
+
+        val corrections = AutoCorrectEngine.suggestions(
+            input = word,
+            vocabulary = autocorrectVocabulary,
+            maxCount = maxSuggestionCount.coerceAtMost(3),
+        )
+        return if (corrections.isNotEmpty()) {
+            SpellingResult.typo(corrections.toTypedArray())
+        } else {
+            SpellingResult.validWord()
         }
     }
 
