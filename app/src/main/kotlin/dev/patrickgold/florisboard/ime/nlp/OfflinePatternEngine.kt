@@ -217,9 +217,9 @@ object OfflinePatternEngine {
         val keywords: List<String>,
     )
 
-    private val sentenceBoundaryRegex = Regex("(?<=[.!?।])\\s+")
+    private val sentenceBoundaryRegex = Regex("(?<=[.!?।])\\s+|\\n+")
     private val factCueRegex = Regex(
-        """\\b(is|are|was|were|has|have|had|because|means|caused|decided|lives|works|likes|hates|became|met|found|told|said|known|called|hai|hain|tha|thi|the|hota|hoti|hua|hui|kiya|karta|karti|karte|rahta|rahti|rehta|rehte)\\b""",
+        """\b(is|are|was|were|has|have|had|because|means|caused|decided|lives|works|likes|hates|became|met|found|told|said|known|called|hai|hain|tha|thi|the|hota|hoti|hua|hui|kiya|karta|karti|karte|rahta|rahti|rehta|rehte)\b""",
         RegexOption.IGNORE_CASE,
     )
     private val keywordStopWords = setOf(
@@ -236,10 +236,10 @@ object OfflinePatternEngine {
      * candidates, not guaranteed semantic facts or a language-model summary.
      */
     fun structureText(text: String, maxChunkChars: Int = 700): StructuredText {
-        val cleaned = text.replace("\\r\\n", "\\n").replace('\\r', '\\n').trim()
+        val cleaned = text.replace("\r\n", "\n").replace('\r', '\n').trim()
         if (cleaned.isEmpty()) return StructuredText(emptyList(), emptyList(), emptyList())
 
-        val sentences = cleaned.split(Regex("(?<=[.!?।])\\\\s+|\\\\n+"))
+        val sentences = cleaned.split(sentenceBoundaryRegex)
             .map { it.trim() }
             .filter { it.isNotEmpty() }
 
