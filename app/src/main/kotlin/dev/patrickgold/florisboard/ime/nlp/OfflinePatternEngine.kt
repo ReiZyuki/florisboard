@@ -349,15 +349,44 @@ object OfflinePatternEngine {
             return@synchronized ChatReply("Kuch text likh bro, phir stored patterns se match karunga.", 0)
         }
 
-        val ranked = data.patterns
-            .map { words -> words to patternMatchScore(promptWords, words) }
-            .filter { it.second > 0.0 }
-            .sortedByDescending { it.second }
-        val bestWords = ranked.firstOrNull()?.first.orEmpty()
-        val bestScore = ranked.firstOrNull()?.second ?: 0.0
-        val secondScore = ranked.getOrNull(1)?.second ?: 0.0
+        // Build candidates from all three sources. The feedback engine applies
+        // the requested 30/30/40 weights and penalizes outputs matching saved
+        // wrong answers while rewarding their paired corrections.
+        val likedExamples = FeedbackLearningEngine.likedExamples(context)
+        val corrections = FeedbackLearningEngine.corrections(context)
+        val candidateTexts = linkedSetOf<String>()
+        data.patterns.forEach { words ->
+            if (patternMatchScore(promptWords, words) > 0.0) candidateTexts.add(words.joinToString(" "))
+        }
+        likedExamples.forEach { (savedInput, savedOutput) ->
+            if (patternMatchScore(promptWords, normalize(savedInput)) > 0.0) candidateTexts.add(savedOutput)
+        }
+        corrections.forEach { correction ->
+            if (patternMatchScore(promptWords, normalize(correction.input)) > 0.0) {
+                candidateTexts.add(correction.correctOutput)
+            }
+        }
+
+        val ranked = candidateTexts.map { candidate ->
+            val basePatternScore = data.patterns.maxOfOrNull { words ->
+                patternMatchScore(promptWords, words).let { inputMatch ->
+                    if (inputMatch <= 0.0) 0.0 else inputMatch * patternMatchScore(normalize(candidate), words)
+                }
+            } ?: 0.0
+            val sourceScore = FeedbackLearningEngine.scoreCandidate(
+                context = context,
+                input = prompt,
+                candidate = candidate,
+                storedPatternScore = basePatternScore,
+            )
+            Triple(normalize(candidate), candidate, sourceScore)
+        }.sortedByDescending { it.third }
+
+        val bestCandidate = ranked.firstOrNull()
+        val bestWords = bestCandidate?.first.orEmpty()
+        val bestScore = bestCandidate?.third ?: 0.0
+        val secondScore = ranked.getOrNull(1)?.third ?: 0.0
         val margin = (bestScore - secondScore).coerceAtLeast(0.0)
-        val confidence = ((bestScore * 75.0) + (margin * 25.0)).toInt().coerceIn(1, 95)
 
         if (bestWords.isEmpty()) {
             return@synchronized ChatReply(
@@ -365,6 +394,21 @@ object OfflinePatternEngine {
                 0,
             )
         }
+
+        val structureExamples = buildList {
+            addAll(data.patterns.map { it.joinToString(" ") })
+            addAll(likedExamples.map { it.second })
+            addAll(corrections.map { it.correctOutput })
+        }
+        val structureConfidence = FeedbackLearningEngine.structureConfidence(
+            bestWords.joinToString(" "),
+            structureExamples,
+        )
+        // Structural validation adjusts confidence only; it does not reject
+        // otherwise usable candidates or claim semantic correctness.
+        val confidence = (
+            bestScore * 65.0 + margin * 15.0 + structureConfidence * 0.20
+        ).toInt().coerceIn(0, 95)
 
         // Keep the best matching example as the response base. Extend it only
         // when the local pattern/learning index has a continuation, and stop
