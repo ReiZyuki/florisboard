@@ -211,6 +211,18 @@ object OfflinePatternEngine {
 
     data class ChatReply(val text: String, val confidencePercent: Int)
 
+    /** Save the exact input/output pair when the user likes a chat reply. */
+    fun recordChatLike(context: Context, input: String, output: String) {
+        FeedbackLearningEngine.recordLike(context, input, output)
+        synchronized(lock) { cachedSnapshot = null }
+    }
+
+    /** Save the rejected output and the user-provided correction as a pair. */
+    fun recordChatCorrection(context: Context, input: String, wrongOutput: String, correctOutput: String) {
+        FeedbackLearningEngine.recordCorrection(context, input, wrongOutput, correctOutput)
+        synchronized(lock) { cachedSnapshot = null }
+    }
+
     data class StructuredText(
         val chunks: List<String>,
         val factCandidates: List<String>,
@@ -414,20 +426,27 @@ object OfflinePatternEngine {
         // when the local pattern/learning index has a continuation, and stop
         // when the engine starts cycling through the same recent words.
         val output = bestWords.toMutableList()
-        val seenStates = mutableSetOf(output.takeLast(MAX_CONTEXT_WORDS).joinToString(" "))
-        repeat(8) {
-            if (output.size >= 32) return@repeat
-            val nextScores = scoresFor(output.takeLast(MAX_CONTEXT_WORDS), "", data)
-            val recent = output.takeLast(3).toSet()
-            val next = nextScores.entries
-                .filter { it.key !in recent }
-                .maxByOrNull { it.value }
-                ?.key ?: return@repeat
-            output.add(next)
-            val state = output.takeLast(MAX_CONTEXT_WORDS).joinToString(" ")
-            if (!seenStates.add(state)) {
-                output.removeAt(output.lastIndex)
-                return@repeat
+        val bestText = bestCandidate?.second.orEmpty()
+        val isFeedbackAnswer = likedExamples.any { it.second.equals(bestText, ignoreCase = true) } ||
+            corrections.any { it.correctOutput.equals(bestText, ignoreCase = true) }
+        // Keep user-approved/corrected answers intact; do not append a random
+        // continuation from an unrelated stored sentence.
+        if (!isFeedbackAnswer) {
+            val seenStates = mutableSetOf(output.takeLast(MAX_CONTEXT_WORDS).joinToString(" "))
+            repeat(8) {
+                if (output.size >= 32) return@repeat
+                val nextScores = scoresFor(output.takeLast(MAX_CONTEXT_WORDS), "", data)
+                val recent = output.takeLast(3).toSet()
+                val next = nextScores.entries
+                    .filter { it.key !in recent }
+                    .maxByOrNull { it.value }
+                    ?.key ?: return@repeat
+                output.add(next)
+                val state = output.takeLast(MAX_CONTEXT_WORDS).joinToString(" ")
+                if (!seenStates.add(state)) {
+                    output.removeAt(output.lastIndex)
+                    return@repeat
+                }
             }
         }
         ChatReply(output.joinToString(" ").replaceFirstChar { it.uppercase() }, confidence)
