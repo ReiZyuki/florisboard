@@ -30,19 +30,19 @@ object FeedbackLearningEngine {
 
     private fun encode(value: String): String = value
         .replace("%", "%25")
-        .replace("\\t", "%09")
-        .replace("\\r", "%0D")
-        .replace("\\n", "%0A")
+        .replace("\t", "%09")
+        .replace("\r", "%0D")
+        .replace("\n", "%0A")
 
     private fun decode(value: String): String = value
-        .replace("%0A", "\\n")
-        .replace("%0D", "\\r")
-        .replace("%09", "\\t")
+        .replace("%0A", "\n")
+        .replace("%0D", "\r")
+        .replace("%09", "\t")
         .replace("%25", "%")
 
     private fun append(file: File, fields: List<String>) {
         file.parentFile?.mkdirs()
-        file.appendText(fields.joinToString("\\t", transform = ::encode) + "\\n")
+        file.appendText(fields.joinToString("\t", transform = ::encode) + "\n")
     }
 
     fun recordLike(context: Context, input: String, output: String) = synchronized(lock) {
@@ -60,7 +60,7 @@ object FeedbackLearningEngine {
         if (!file.exists()) return emptyList()
         return runCatching {
             file.readLines().mapNotNull { line ->
-                val fields = line.split('\\t')
+                val fields = line.split('\t')
                 if (fields.size != columns) null else fields.map(::decode)
             }
         }.getOrDefault(emptyList())
@@ -84,10 +84,6 @@ object FeedbackLearningEngine {
         return a.intersect(b).size.toDouble() / max(a.size, b.size)
     }
 
-    /**
-     * Returns an adjustment in the 0..1 range using the requested source weights.
-     * Call with a candidate response; this does not generate language by itself.
-     */
     fun scoreCandidate(context: Context, input: String, candidate: String, storedPatternScore: Double): Double {
         val stored = storedPatternScore.coerceIn(0.0, 1.0)
         val likes = likedExamples(context)
@@ -105,16 +101,12 @@ object FeedbackLearningEngine {
             correctionReward = max(correctionReward, relevance * (correctMatch - wrongMatch).coerceIn(-1.0, 1.0))
         }
 
-        // 30% patterns + 30% liked examples + 40% correction signal.
-        // Correction signal is centered at 0.5 so no relevant correction is neutral.
+        // The 40% correction channel is neutral when there is no related correction.
         val correctionScore = (0.5 + correctionReward / 2.0).coerceIn(0.0, 1.0)
         return (stored * 0.30 + likedScore * 0.30 + correctionScore * 0.40).coerceIn(0.0, 1.0)
     }
 
-    /**
-     * Lightweight structural confidence only: checks adjacent token pairs and
-     * complete phrases observed in examples. It does not certify factual meaning.
-     */
+    /** Structure-only confidence: matching adjacent word pairs, not semantic truth. */
     fun structureConfidence(candidate: String, examples: List<String>): Int {
         val words = tokens(candidate)
         if (words.size < 2 || examples.isEmpty()) return 0
@@ -125,7 +117,10 @@ object FeedbackLearningEngine {
         val candidateBigrams = (0 until words.lastIndex).map { words[it] + " " + words[it + 1] }
         val pairScore = candidateBigrams.count { it in knownBigrams }.toDouble() / candidateBigrams.size
         val phrase = words.joinToString(" ")
-        val phraseSeen = exampleTokens.any { it.joinToString(" ").contains(phrase) || phrase.contains(it.joinToString(" ")) }
+        val phraseSeen = exampleTokens.any {
+            val example = it.joinToString(" ")
+            example.contains(phrase) || phrase.contains(example)
+        }
         return ((pairScore * 85.0) + if (phraseSeen) 15.0 else 0.0).toInt().coerceIn(0, 100)
     }
 }
