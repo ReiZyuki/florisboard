@@ -38,6 +38,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -53,6 +54,14 @@ import androidx.compose.ui.unit.dp
 import dev.patrickgold.florisboard.ime.nlp.OfflinePatternEngine
 import dev.patrickgold.florisboard.lib.compose.FlorisScreen
 
+private data class OfflineChatMessage(
+    val isUser: Boolean,
+    val text: String,
+    val inputForReply: String? = null,
+    val rawOutput: String? = null,
+    val feedbackStatus: String? = null,
+)
+
 @Composable
 fun OfflineAiScreen() = FlorisScreen {
     title = "Offline AI"
@@ -62,7 +71,9 @@ fun OfflineAiScreen() = FlorisScreen {
     var selectedTab by remember { mutableStateOf(1) }
     var patternsText by remember { mutableStateOf(OfflinePatternEngine.readPatterns(context).joinToString("\n")) }
     var prompt by remember { mutableStateOf("") }
-    val messages = remember { mutableStateListOf<Pair<Boolean, String>>() }
+    val messages = remember { mutableStateListOf<OfflineChatMessage>() }
+    var pendingCorrectionIndex by remember { mutableStateOf<Int?>(null) }
+    var correctionText by remember { mutableStateOf("") }
     val colors = MaterialTheme.colorScheme
 
     content {
@@ -171,36 +182,96 @@ fun OfflineAiScreen() = FlorisScreen {
                             modifier = Modifier.fillMaxSize().padding(14.dp),
                             verticalArrangement = Arrangement.spacedBy(14.dp),
                         ) {
-                            itemsIndexed(messages) { _, message ->
+                            itemsIndexed(messages) { messageIndex, message ->
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = if (message.first) Arrangement.End else Arrangement.Start,
+                                    horizontalArrangement = if (message.isUser) Arrangement.End else Arrangement.Start,
                                     verticalAlignment = Alignment.Top,
                                 ) {
                                     Column(
                                         modifier = Modifier.fillMaxWidth(0.88f),
-                                        horizontalAlignment = if (message.first) Alignment.End else Alignment.Start,
+                                        horizontalAlignment = if (message.isUser) Alignment.End else Alignment.Start,
                                         verticalArrangement = Arrangement.spacedBy(5.dp),
                                     ) {
-                                        Text(if (message.first) "YOU" else "OFFLINE AI", style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant, fontWeight = FontWeight.Bold)
+                                        Text(if (message.isUser) "YOU" else "OFFLINE AI", style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant, fontWeight = FontWeight.Bold)
                                         Surface(
                                             shape = RoundedCornerShape(
                                                 topStart = 18.dp,
                                                 topEnd = 18.dp,
-                                                bottomStart = if (message.first) 18.dp else 5.dp,
-                                                bottomEnd = if (message.first) 5.dp else 18.dp,
+                                                bottomStart = if (message.isUser) 18.dp else 5.dp,
+                                                bottomEnd = if (message.isUser) 5.dp else 18.dp,
                                             ),
-                                            color = if (message.first) colors.primary else colors.surface,
+                                            color = if (message.isUser) colors.primary else colors.surface,
                                         ) {
                                             Text(
-                                                message.second,
+                                                message.text,
                                                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp),
                                                 style = MaterialTheme.typography.bodyMedium,
-                                                color = if (message.first) colors.onPrimary else colors.onSurface,
+                                                color = if (message.isUser) colors.onPrimary else colors.onSurface,
                                             )
+                                        }
+                                        if (!message.isUser && message.inputForReply != null && message.rawOutput != null) {
+                                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                                TextButton(
+                                                    enabled = message.feedbackStatus == null,
+                                                    onClick = {
+                                                        OfflinePatternEngine.recordChatLike(context, message.inputForReply, message.rawOutput)
+                                                        messages[messageIndex] = message.copy(feedbackStatus = "Liked")
+                                                    },
+                                                ) { Text("👍 Like") }
+                                                TextButton(
+                                                    enabled = message.feedbackStatus == null,
+                                                    onClick = {
+                                                        pendingCorrectionIndex = messageIndex
+                                                        correctionText = ""
+                                                    },
+                                                ) { Text("👎 Dislike") }
+                                                message.feedbackStatus?.let { status ->
+                                                    Text(status, style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant)
+                                                }
+                                            }
                                         }
                                     }
                                 }
+                            }
+                        }
+                    }
+                }
+
+                val correctionTarget = pendingCorrectionIndex?.let { messages.getOrNull(it) }
+                if (correctionTarget != null) {
+                    Surface(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp), color = colors.secondaryContainer) {
+                        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("What should the correct reply be?", fontWeight = FontWeight.SemiBold, color = colors.onSecondaryContainer)
+                            Text("Input: ${correctionTarget.inputForReply}", style = MaterialTheme.typography.bodySmall, color = colors.onSecondaryContainer)
+                            Text("Rejected reply: ${correctionTarget.rawOutput}", style = MaterialTheme.typography.bodySmall, color = colors.onSecondaryContainer)
+                            OutlinedTextField(
+                                value = correctionText,
+                                onValueChange = { correctionText = it },
+                                modifier = Modifier.fillMaxWidth(),
+                                label = { Text("Correct output") },
+                                minLines = 2,
+                                maxLines = 5,
+                                shape = RoundedCornerShape(14.dp),
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(
+                                    enabled = correctionText.isNotBlank(),
+                                    onClick = {
+                                        val targetIndex = pendingCorrectionIndex
+                                        val target = targetIndex?.let { messages.getOrNull(it) }
+                                        if (targetIndex != null && target?.inputForReply != null && target.rawOutput != null && correctionText.isNotBlank()) {
+                                            OfflinePatternEngine.recordChatCorrection(context, target.inputForReply, target.rawOutput, correctionText.trim())
+                                            messages[targetIndex] = target.copy(feedbackStatus = "Correction saved")
+                                            pendingCorrectionIndex = null
+                                            correctionText = ""
+                                        }
+                                    },
+                                ) { Text("Save correction") }
+                                TextButton(onClick = {
+                                    pendingCorrectionIndex = null
+                                    correctionText = ""
+                                }) { Text("Cancel") }
                             }
                         }
                     }
@@ -220,9 +291,16 @@ fun OfflineAiScreen() = FlorisScreen {
                         onClick = {
                             val input = prompt.trim()
                             if (input.isNotEmpty()) {
-                                messages.add(true to input)
+                                messages.add(OfflineChatMessage(isUser = true, text = input))
                                 val reply = OfflinePatternEngine.chatReply(context, input)
-                                messages.add(false to "${reply.text}\n\nConfidence estimate: ${reply.confidencePercent}%")
+                                messages.add(
+                                    OfflineChatMessage(
+                                        isUser = false,
+                                        text = "${reply.text}\n\nConfidence estimate: ${reply.confidencePercent}%",
+                                        inputForReply = input,
+                                        rawOutput = reply.text,
+                                    )
+                                )
                                 prompt = ""
                             }
                         },
