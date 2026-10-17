@@ -84,14 +84,18 @@ object FeedbackLearningEngine {
         return a.intersect(b).size.toDouble() / max(a.size, b.size)
     }
 
-    fun scoreCandidate(context: Context, input: String, candidate: String, storedPatternScore: Double): Double {
+    fun scoreCandidate(
+        input: String,
+        candidate: String,
+        storedPatternScore: Double,
+        likes: List<Pair<String, String>>,
+        records: List<Correction>,
+    ): Double {
         val stored = storedPatternScore.coerceIn(0.0, 1.0)
-        val likes = likedExamples(context)
         val likedScore = likes.maxOfOrNull { (savedInput, savedOutput) ->
             similarity(input, savedInput) * similarity(candidate, savedOutput)
         } ?: 0.0
 
-        val records = corrections(context)
         var correctionReward = 0.0
         for (record in records) {
             val relevance = similarity(input, record.input)
