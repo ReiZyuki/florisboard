@@ -386,10 +386,11 @@ object OfflinePatternEngine {
                 }
             } ?: 0.0
             val sourceScore = FeedbackLearningEngine.scoreCandidate(
-                context = context,
                 input = prompt,
                 candidate = candidate,
                 storedPatternScore = basePatternScore,
+                likes = likedExamples,
+                records = corrections,
             )
             Triple(normalize(candidate), candidate, sourceScore)
         }.sortedByDescending { it.third }
